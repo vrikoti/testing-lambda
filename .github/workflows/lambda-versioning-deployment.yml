@@ -37,16 +37,19 @@ jobs:
           echo "CHANGED_FOLDERS=$CHANGED_FOLDERS" >> $GITHUB_ENV
 
       - name: Debug Changed Folders
-        run: echo "Changed Folders: ${{ env.CHANGED_FOLDERS }}"
+        run: |
+          echo "Changed Folders: $CHANGED_FOLDERS"
+        env:
+          CHANGED_FOLDERS: ${{ env.CHANGED_FOLDERS }}
 
       - name: Publish New Lambda Versions
         run: |
-          if [ -z "${{ env.CHANGED_FOLDERS }}" ]; then
+          if [ -z "$CHANGED_FOLDERS" ]; then
             echo "No Lambda functions changed. Skipping..."
             exit 0
           fi
           # Publish new version for each changed Lambda function
-          for folder in ${{ env.CHANGED_FOLDERS }}; do
+          for folder in $CHANGED_FOLDERS; do
             echo "Publishing new version of Lambda in folder: $folder"
             if [ -f "$folder/function.zip" ]; then
               aws lambda update-function-code --function-name "$folder" --zip-file fileb://$folder/function.zip
@@ -55,6 +58,8 @@ jobs:
               echo "No function.zip found in $folder, skipping..."
             fi
           done
+        env:
+          CHANGED_FOLDERS: ${{ env.CHANGED_FOLDERS }}
 
   deploy_lambdas:
     name: Deploy Updated Lambda Versions
@@ -72,11 +77,13 @@ jobs:
         if: ${{ env.CHANGED_FOLDERS != '' }}
         run: |
           # Update alias to point to the new Lambda version
-          for folder in ${{ env.CHANGED_FOLDERS }}; do
+          for folder in $CHANGED_FOLDERS; do
             echo "Deploying Lambda version in folder: $folder"
             NEW_VERSION=$(aws lambda list-versions-by-function --function-name "$folder" --query 'Versions[-1].Version' --output text)
             aws lambda update-alias --function-name "$folder" --name "blue" --function-version "$NEW_VERSION"
           done
+        env:
+          CHANGED_FOLDERS: ${{ env.CHANGED_FOLDERS }}
 
   track_lambda_versions:
     name: Track Lambda Versions
@@ -94,7 +101,9 @@ jobs:
         if: ${{ env.CHANGED_FOLDERS != '' }}
         run: |
           # Track the current version of each changed Lambda function
-          for folder in ${{ env.CHANGED_FOLDERS }}; do
+          for folder in $CHANGED_FOLDERS; do
             version=$(aws lambda list-versions-by-function --function-name "$folder" --query 'Versions[-1].Version' --output text)
             echo "Lambda function $folder is now at version $version"
           done
+        env:
+          CHANGED_FOLDERS: ${{ env.CHANGED_FOLDERS }}
