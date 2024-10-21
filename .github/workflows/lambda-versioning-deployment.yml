@@ -61,6 +61,10 @@ jobs:
       - name: Publish New Lambda Versions
         if: ${{ env.CHANGED_FOLDERS != '' }}
         run: |
+          if [ -z "$CHANGED_FOLDERS" ]; then
+            echo "No Lambda functions changed. Skipping..."
+            exit 0
+          fi
           # Publish new version for each changed Lambda function
           for folder in $CHANGED_FOLDERS; do
             echo "Publishing new version of Lambda in folder: $folder"
@@ -85,6 +89,13 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Debug Deploy Changed Folders
+        if: ${{ env.CHANGED_FOLDERS != '' }}
+        run: |
+          echo "CHANGED_FOLDERS during deploy step: $CHANGED_FOLDERS"
+        env:
+          CHANGED_FOLDERS: ${{ env.CHANGED_FOLDERS }}
 
       - name: Deploy Updated Lambdas
         if: ${{ env.CHANGED_FOLDERS != '' }}
