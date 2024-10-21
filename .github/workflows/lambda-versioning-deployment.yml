@@ -31,7 +31,7 @@ jobs:
         id: detect_changes
         run: |
           # Identify which Lambda functions have changed
-          CHANGED_FOLDERS=$(git diff --name-only HEAD^ HEAD | grep 'test-' | cut -d '/' -f1 | uniq)
+          CHANGED_FOLDERS=$(git diff --name-only HEAD~1 HEAD | grep 'test-' | cut -d '/' -f1 | uniq)
           echo "CHANGED_FOLDERS=$CHANGED_FOLDERS" >> $GITHUB_ENV
 
       - name: Publish New Lambda Versions
