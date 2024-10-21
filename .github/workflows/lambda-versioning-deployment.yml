@@ -75,4 +75,26 @@ jobs:
           for folder in ${{ env.CHANGED_FOLDERS }}; do
             echo "Deploying Lambda version in folder: $folder"
             NEW_VERSION=$(aws lambda list-versions-by-function --function-name "$folder" --query 'Versions[-1].Version' --output text)
-            aws lambda update-alias --function-name "$folder" --name "blue" --function-version "$NEW_
+            aws lambda update-alias --function-name "$folder" --name "blue" --function-version "$NEW_VERSION"
+          done
+
+  track_lambda_versions:
+    name: Track Lambda Versions
+    runs-on: ubuntu-latest
+    needs: detect_and_publish
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Track Lambda Versions
+        if: ${{ env.CHANGED_FOLDERS != '' }}
+        run: |
+          # Track the current version of each changed Lambda function
+          for folder in ${{ env.CHANGED_FOLDERS }}; do
+            version=$(aws lambda list-versions-by-function --function-name "$folder" --query 'Versions[-1].Version' --output text)
+            echo "Lambda function $folder is now at version $version"
+          done
