@@ -30,15 +30,19 @@ jobs:
         run: |
           # Identify which Lambda functions have changed
           if [ $(git rev-list --count HEAD) -eq 1 ]; then
+            echo "Initial commit detected, using git diff-tree"
             CHANGED_FOLDERS=$(git diff-tree --no-commit-id --name-only -r HEAD | grep 'test-' | cut -d '/' -f1 | uniq || true)
           else
-            CHANGED_FOLDERS=$(git diff --name-only HEAD~1 HEAD | grep 'test-' | cut -d '/' -f1 | uniq || true)
+            echo "Non-initial commit, using git diff"
+            CHANGED_FILES=$(git diff --name-only origin/main HEAD)
+            echo "Changed files: $CHANGED_FILES"
+            CHANGED_FOLDERS=$(echo "$CHANGED_FILES" | grep 'test-' | cut -d '/' -f1 | uniq || true)
           fi
           echo "CHANGED_FOLDERS=$CHANGED_FOLDERS" >> $GITHUB_ENV
 
-      - name: Debug Changed Folders
+      - name: Debug Changed Folders After Assignment
         run: |
-          echo "Changed Folders: $CHANGED_FOLDERS"
+          echo "CHANGED_FOLDERS after assignment: $CHANGED_FOLDERS"
         env:
           CHANGED_FOLDERS: ${{ env.CHANGED_FOLDERS }}
 
