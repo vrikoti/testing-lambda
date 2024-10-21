@@ -31,7 +31,7 @@ jobs:
         id: detect_changes
         run: |
           # Identify which Lambda functions have changed
-          CHANGED_FOLDERS=$(git diff --name-only HEAD~1 HEAD | grep 'test-' | cut -d '/' -f1 | uniq)
+          CHANGED_FOLDERS=$(git diff --name-only HEAD~1 HEAD | grep 'test-' | cut -d '/' -f1 | uniq || true)
           echo "CHANGED_FOLDERS=$CHANGED_FOLDERS" >> $GITHUB_ENV
 
       - name: Publish New Lambda Versions
@@ -40,7 +40,7 @@ jobs:
           # Publish new version for each changed Lambda function
           for folder in ${{ env.CHANGED_FOLDERS }}; do
             echo "Publishing new version of Lambda in folder: $folder"
-            aws lambda update-function-code --function-name "$folder" --s3-bucket "<your_s3_bucket>" --s3-key "${folder}/artifact.zip"
+            aws lambda update-function-code --function-name "$folder" --zip-file fileb://$folder/function.zip
             aws lambda publish-version --function-name "$folder"
           done
 
