@@ -36,14 +36,24 @@ jobs:
           fi
           echo "CHANGED_FOLDERS=$CHANGED_FOLDERS" >> $GITHUB_ENV
 
+      - name: Debug Changed Folders
+        run: echo "Changed Folders: ${{ env.CHANGED_FOLDERS }}"
+
       - name: Publish New Lambda Versions
-        if: ${{ env.CHANGED_FOLDERS && env.CHANGED_FOLDERS != '' }}
         run: |
+          if [ -z "${{ env.CHANGED_FOLDERS }}" ]; then
+            echo "No Lambda functions changed. Skipping..."
+            exit 0
+          fi
           # Publish new version for each changed Lambda function
           for folder in ${{ env.CHANGED_FOLDERS }}; do
             echo "Publishing new version of Lambda in folder: $folder"
-            aws lambda update-function-code --function-name "$folder" --zip-file fileb://$folder/function.zip
-            aws lambda publish-version --function-name "$folder"
+            if [ -f "$folder/function.zip" ]; then
+              aws lambda update-function-code --function-name "$folder" --zip-file fileb://$folder/function.zip
+              aws lambda publish-version --function-name "$folder"
+            else
+              echo "No function.zip found in $folder, skipping..."
+            fi
           done
 
   deploy_lambdas:
