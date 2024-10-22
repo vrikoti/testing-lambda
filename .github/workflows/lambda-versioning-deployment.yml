@@ -138,11 +138,11 @@ jobs:
           # Print the output file to the console for visibility
           cat $output_file
 
-      - name: Upload Lambda Versions Output
-        uses: actions/upload-artifact@v3
-        with:
-          name: lambda-versions-output
-          path: lambda_versions.txt
-      - name: Upload to S3
+      - name: Upload Lambda Versions Output to S3
         run: |
-          aws s3 cp lambda_versions.txt s3://lambda-versioning-data/lambda_versions.txt
+          if [ -f lambda_versions.txt ]; then
+            aws s3 cp lambda_versions.txt s3://lambda-versioning-data/lambda_versions.txt
+          else
+            echo "Error: lambda_versions.txt does not exist."
+            exit 1
+          fi
