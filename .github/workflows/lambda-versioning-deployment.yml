@@ -29,35 +29,6 @@ jobs:
         id: changed-files
         uses: tj-actions/changed-files@v39
 
-      - name: Get the current branch name
-        id: get-branch
-        run: |
-          CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-          echo "Current branch: $CURRENT_BRANCH"
-          echo "::set-output name=branch::$CURRENT_BRANCH"
-
-      - name: Filter Changed Files
-        id: filter-changed-files
-        run: |
-          echo "${{ steps.changed-files.outputs.all_changed_files }}" | tr ' ' '\n' | grep -v -e '.gitignore' -e 'rocro.yml' | tr '\n' ' ' > filtered_files.txt
-          echo "::set-output name=filtered_files::$(cat filtered_files.txt)"
-
-      - name: Find Changed Directories
-        id: find-changed-dirs
-        run: |
-          > updated_directories.txt
-          for changed_file in $(cat filtered_files.txt); do
-            mod_dir=$(dirname "$changed_file")
-            updated_dir=$(echo "$mod_dir" | cut -d/ -f1)
-            echo "$updated_dir" >> updated_directories.txt
-          done
-          echo "Below directories have been updated ... "
-          cat updated_directories.txt
-          echo "Below unique directories were updated ... "
-          sort updated_directories.txt | uniq > unique_updated_directories.txt
-          cat unique_updated_directories.txt
-          echo "::set-output name=changed_dirs::$(cat unique_updated_directories.txt)"
-
       - name: Generate Unique Deployment ID
         id: generate-deployment-id
         run: |
@@ -65,8 +36,24 @@ jobs:
           echo "Deployment ID: $DEPLOYMENT_ID"
           echo "::set-output name=deployment_id::$DEPLOYMENT_ID"
 
+      - name: Initialize or Download CSV
+        run: |
+          if aws s3 cp s3://lambda-versioning-data/lambda_versions.csv .; then
+            echo "Downloaded existing CSV."
+          else
+            echo "Creating new CSV."
+            echo "DeploymentID,FunctionName,Version,LastModified,Runtime,MemorySize,Timeout,Changed" > lambda_versions.csv  # Initialize CSV header
+          fi
+
+      - name: Find All Lambda Functions
+        id: find-all-lambdas
+        run: |
+          ALL_LAMBDAS=$(aws lambda list-functions --query 'Functions[*].FunctionName' --output text)
+          echo "$ALL_LAMBDAS" > all_lambdas.txt
+          echo "::set-output name=all_lambdas::$ALL_LAMBDAS"
+
       - name: Zip Lambda Function Code
-        if: ${{ steps.find-changed-dirs.outputs.changed_dirs != '' }}
+        if: ${{ steps.changed-files.outputs.all_changed_files != '' }}
         run: |
           for folder in $(cat unique_updated_directories.txt); do
             echo "Creating zip for $folder"
@@ -75,12 +62,8 @@ jobs:
             cd ..
           done
 
-      - name: Initialize CSV
-        run: |
-          echo "DeploymentID,FunctionName,Version,LastModified,Runtime,MemorySize,Timeout,Changed" > lambda_versions.csv  # Initialize CSV header
-
       - name: Publish New Lambda Versions
-        if: ${{ steps.find-changed-dirs.outputs.changed_dirs != '' }}
+        if: ${{ steps.changed-files.outputs.all_changed_files != '' }}
         run: |
           for folder in $(cat unique_updated_directories.txt); do
             echo "Publishing new version of Lambda in folder: $folder"
@@ -108,22 +91,24 @@ jobs:
 
               # Append details to CSV with Changed status
               echo "${{ steps.generate-deployment-id.outputs.deployment_id }},$FUNCTION_NAME,$NEW_VERSION,$LAST_MODIFIED,$RUNTIME,$MEMORY_SIZE,$TIMEOUT,Yes" >> lambda_versions.csv
-            else
-              echo "No function.zip found in $folder, skipping..."
-              # If no update, still log the function details
-              FUNCTION_DETAILS=$(aws lambda get-function --function-name "$folder" --output json)
-              FUNCTION_NAME=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.FunctionName')
+            fi
+          done
+
+      - name: Log Unchanged Lambda Functions
+        run: |
+          for function in $(cat all_lambdas.txt); do
+            if ! grep -q "$function" lambda_versions.csv; then
+              FUNCTION_DETAILS=$(aws lambda get-function --function-name "$function" --output json)
               LAST_MODIFIED=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.LastModified')
               RUNTIME=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.Runtime')
               MEMORY_SIZE=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.MemorySize')
               TIMEOUT=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.Timeout')
 
               # Append unchanged function details to CSV
-              echo "${{ steps.generate-deployment-id.outputs.deployment_id }},$FUNCTION_NAME,Not Changed,$LAST_MODIFIED,$RUNTIME,$MEMORY_SIZE,$TIMEOUT,No" >> lambda_versions.csv
+              echo "${{ steps.generate-deployment-id.outputs.deployment_id }},$function,Not Changed,$LAST_MODIFIED,$RUNTIME,$MEMORY_SIZE,$TIMEOUT,No" >> lambda_versions.csv
             fi
           done
 
       - name: Upload Lambda Versions to S3
-        if: ${{ steps.find-changed-dirs.outputs.changed_dirs != '' }}
         run: |
           aws s3 cp lambda_versions.csv s3://lambda-versioning-data/lambda_versions.csv
