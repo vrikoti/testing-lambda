@@ -86,6 +86,8 @@ jobs:
 
               # Append details to new CSV with Changed status
               echo "${{ steps.generate-deployment-id.outputs.deployment_id }},$FUNCTION_NAME,$NEW_VERSION,$LAST_MODIFIED,Yes" >> "${{ steps.init-csv.outputs.csv_name }}"
+            else
+              echo "No function.zip found in $folder, skipping..."
             fi
           done
 
