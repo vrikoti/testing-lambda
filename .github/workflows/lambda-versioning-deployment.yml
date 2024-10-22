@@ -29,13 +29,6 @@ jobs:
         id: changed-files
         uses: tj-actions/changed-files@v39
 
-      - name: Get the current branch name
-        id: get-branch
-        run: |
-          CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-          echo "Current branch: $CURRENT_BRANCH"
-          echo "::set-output name=branch::$CURRENT_BRANCH"
-
       - name: Filter Changed Files
         id: filter-changed-files
         run: |
@@ -51,11 +44,7 @@ jobs:
             updated_dir=$(echo "$mod_dir" | cut -d/ -f1)
             echo "$updated_dir" >> updated_directories.txt
           done
-          echo "Below directories have been updated ... "
-          cat updated_directories.txt
-          echo "Below unique directories were updated ... "
           sort updated_directories.txt | uniq > unique_updated_directories.txt
-          cat unique_updated_directories.txt
           echo "::set-output name=changed_dirs::$(cat unique_updated_directories.txt)"
 
       - name: Zip Lambda Function Code
@@ -71,48 +60,26 @@ jobs:
       - name: Publish New Lambda Versions
         if: ${{ steps.find-changed-dirs.outputs.changed_dirs != '' }}
         run: |
+          echo '{}' > lambda_versions.json  # Initialize an empty JSON file
           for folder in $(cat unique_updated_directories.txt); do
             echo "Publishing new version of Lambda in folder: $folder"
             if [ -f "$folder/function.zip" ]; then
               aws lambda update-function-code --function-name "$folder" --zip-file fileb://$folder/function.zip
+              NEW_VERSION=$(aws lambda publish-version --function-name "$folder" --output text)
+              echo "New version published: $NEW_VERSION for $folder"
 
-              # Wait for the update to complete
-              while true; do
-                status=$(aws lambda get-function --function-name "$folder" --query 'Configuration.LastUpdateStatus' --output text)
-                if [ "$status" != "InProgress" ]; then
-                  break
-                fi
-                echo "Waiting for update to complete for $folder..."
-                sleep 5  # Wait for 5 seconds before checking again
-              done
-
-              # Publish the new version
-              aws lambda publish-version --function-name "$folder"
+              # Track the new version
+              jq --arg name "$folder" --arg version "$NEW_VERSION" \
+                '.[$name] = { "version": $version }' lambda_versions.json > tmp.json && mv tmp.json lambda_versions.json
             else
               echo "No function.zip found in $folder, skipping..."
             fi
           done
 
-  deploy_lambdas:
-    name: Deploy Updated Lambda Versions
-    runs-on: ubuntu-latest
-    needs: detect_and_publish
-    steps:
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
-
-      - name: Deploy Updated Lambdas
-        if: ${{ steps.find-changed-dirs.outputs.changed_dirs != '' }}
+      - name: Upload Lambda Versions to S3
         run: |
-          for folder in $(cat unique_updated_directories.txt); do
-            echo "Deploying Lambda version in folder: $folder"
-            NEW_VERSION=$(aws lambda list-versions-by-function --function-name "$folder" --query 'Versions[-1].Version' --output text)
-            aws lambda update-alias --function-name "$folder" --name "blue" --function-version "$NEW_VERSION"
-          done
+          aws s3 cp lambda_versions.json s3://lambda-versioning-data/lambda_versions.json
+
   track_lambda_versions:
     name: Track Lambda Versions
     runs-on: ubuntu-latest
@@ -125,36 +92,16 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Track and Upload Lambda Versions
-        if: ${{ steps.find-changed-dirs.outputs.changed_dirs != '' }}
+      - name: Retrieve and Log Lambda Versions
         run: |
-          # Create and clear the output file
-          output_file="lambda_versions.txt"
-          echo "Lambda Versions Tracking" > $output_file
-          echo "========================" >> $output_file
-
-          # Track versions for each updated Lambda function
+          echo "Tracking Lambda versions..."
           for folder in $(cat unique_updated_directories.txt); do
-            echo "Checking versions for function: $folder"
-            version=$(aws lambda list-versions-by-function --function-name "$folder" --query 'Versions[*].Version' --output text)
-            
-            if [ $? -ne 0 ]; then
-              echo "Error retrieving versions for $folder" >> $output_file
-            else
-              echo "Lambda function $folder has versions: $version" >> $output_file
-            fi
+            version=$(aws lambda list-versions-by-function --function-name "$folder" --query 'Versions[-1].Version' --output text)
+            echo "Lambda function $folder is now at version $version"
+            jq --arg name "$folder" --arg version "$version" \
+              '.[$name].version = $version' lambda_versions.json > tmp.json && mv tmp.json lambda_versions.json
           done
 
-          # Display the contents of the output file for debugging
-          echo "Contents of $output_file:"
-          cat $output_file
-
-          # Upload the file to S3
-          echo "Checking if $output_file exists..."
-          if [ -f $output_file ]; then
-            echo "Uploading to S3..."
-            aws s3 cp $output_file s3://lambda-versioning-data/lambda_versions.txt
-          else
-            echo "Error: $output_file does not exist."
-            exit 1
-          fi
+      - name: Upload Updated Lambda Versions to S3
+        run: |
+          aws s3 cp lambda_versions.json s3://lambda-versioning-data/lambda_versions.json
