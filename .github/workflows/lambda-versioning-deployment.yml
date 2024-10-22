@@ -58,6 +58,13 @@ jobs:
           cat unique_updated_directories.txt
           echo "::set-output name=changed_dirs::$(cat unique_updated_directories.txt)"
 
+      - name: Generate Unique Deployment ID
+        id: generate-deployment-id
+        run: |
+          DEPLOYMENT_ID=$(date +%Y%m%d%H%M%S)
+          echo "Deployment ID: $DEPLOYMENT_ID"
+          echo "::set-output name=deployment_id::$DEPLOYMENT_ID"
+
       - name: Zip Lambda Function Code
         if: ${{ steps.find-changed-dirs.outputs.changed_dirs != '' }}
         run: |
@@ -68,31 +75,30 @@ jobs:
             cd ..
           done
 
+      - name: Initialize CSV
+        run: |
+          echo "DeploymentID,FunctionName,Version,LastModified,Runtime,MemorySize,Timeout,Changed" > lambda_versions.csv  # Initialize CSV header
+
       - name: Publish New Lambda Versions
         if: ${{ steps.find-changed-dirs.outputs.changed_dirs != '' }}
         run: |
-          echo "FunctionName,Version,LastModified,Runtime,MemorySize,Timeout" > lambda_versions.csv  # Initialize CSV header
           for folder in $(cat unique_updated_directories.txt); do
             echo "Publishing new version of Lambda in folder: $folder"
             if [ -f "$folder/function.zip" ]; then
-              # Update the function code
               aws lambda update-function-code --function-name "$folder" --zip-file fileb://$folder/function.zip
 
-              # Wait for the update to complete
               while true; do
                 status=$(aws lambda get-function --function-name "$folder" --query 'Configuration.LastUpdateStatus' --output text)
                 if [ "$status" != "InProgress" ]; then
                   break
                 fi
                 echo "Waiting for update to complete for $folder..."
-                sleep 5  # Wait for 5 seconds before checking again
+                sleep 5
               done
 
-              # Now publish the new version
               NEW_VERSION=$(aws lambda publish-version --function-name "$folder" --query 'Version' --output text)
               echo "New version published: $NEW_VERSION for $folder"
 
-              # Fetch function details
               FUNCTION_DETAILS=$(aws lambda get-function --function-name "$folder" --output json)
               FUNCTION_NAME=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.FunctionName')
               LAST_MODIFIED=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.LastModified')
@@ -100,10 +106,20 @@ jobs:
               MEMORY_SIZE=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.MemorySize')
               TIMEOUT=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.Timeout')
 
-              # Append details to CSV
-              echo "$FUNCTION_NAME,$NEW_VERSION,$LAST_MODIFIED,$RUNTIME,$MEMORY_SIZE,$TIMEOUT" >> lambda_versions.csv
+              # Append details to CSV with Changed status
+              echo "${{ steps.generate-deployment-id.outputs.deployment_id }},$FUNCTION_NAME,$NEW_VERSION,$LAST_MODIFIED,$RUNTIME,$MEMORY_SIZE,$TIMEOUT,Yes" >> lambda_versions.csv
             else
               echo "No function.zip found in $folder, skipping..."
+              # If no update, still log the function details
+              FUNCTION_DETAILS=$(aws lambda get-function --function-name "$folder" --output json)
+              FUNCTION_NAME=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.FunctionName')
+              LAST_MODIFIED=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.LastModified')
+              RUNTIME=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.Runtime')
+              MEMORY_SIZE=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.MemorySize')
+              TIMEOUT=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.Timeout')
+
+              # Append unchanged function details to CSV
+              echo "${{ steps.generate-deployment-id.outputs.deployment_id }},$FUNCTION_NAME,Not Changed,$LAST_MODIFIED,$RUNTIME,$MEMORY_SIZE,$TIMEOUT,No" >> lambda_versions.csv
             fi
           done
 
@@ -111,5 +127,3 @@ jobs:
         if: ${{ steps.find-changed-dirs.outputs.changed_dirs != '' }}
         run: |
           aws s3 cp lambda_versions.csv s3://lambda-versioning-data/lambda_versions.csv
-
-  # Additional jobs for deploying lambdas or tracking versions can be added here
