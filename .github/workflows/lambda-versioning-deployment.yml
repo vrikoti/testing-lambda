@@ -114,10 +114,10 @@ jobs:
             aws lambda update-alias --function-name "$folder" --name "blue" --function-version "$NEW_VERSION"
           done
   track_lambda_versions:
-    name: Track Lambda Versions
-    runs-on: ubuntu-latest
-    needs: detect_and_publish
-    steps:
+     name: Track Lambda Versions
+     runs-on: ubuntu-latest
+     needs: detect_and_publish
+     steps:
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
@@ -140,7 +140,7 @@ jobs:
           done
           echo "Contents of $output_file:"
           cat $output_file
-          echo "Current directory contents:"
+          echo "Current directory contents after tracking:"
           ls -la
 
       - name: Upload Lambda Versions Output to S3
@@ -153,4 +153,3 @@ jobs:
             echo "Error: lambda_versions.txt does not exist."
             exit 1
           fi
-
