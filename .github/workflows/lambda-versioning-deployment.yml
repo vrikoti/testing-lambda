@@ -36,14 +36,10 @@ jobs:
           echo "Deployment ID: $DEPLOYMENT_ID"
           echo "::set-output name=deployment_id::$DEPLOYMENT_ID"
 
-      - name: Initialize or Download CSV
+      - name: Initialize New CSV File
         run: |
-          if aws s3 cp s3://lambda-versioning-data/lambda_versions.csv .; then
-            echo "Downloaded existing CSV."
-          else
-            echo "Creating new CSV."
-            echo "DeploymentID,FunctionName,Version,LastModified,Runtime,MemorySize,Timeout,Changed" > lambda_versions.csv  # Initialize CSV header
-          fi
+          NEW_CSV_NAME="lambda_versions_${{ steps.generate-deployment-id.outputs.deployment_id }}.csv"
+          echo "DeploymentID,FunctionName,Version,LastModified,Changed" > $NEW_CSV_NAME
 
       - name: Find All Lambda Functions
         id: find-all-lambdas
@@ -85,30 +81,24 @@ jobs:
               FUNCTION_DETAILS=$(aws lambda get-function --function-name "$folder" --output json)
               FUNCTION_NAME=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.FunctionName')
               LAST_MODIFIED=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.LastModified')
-              RUNTIME=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.Runtime')
-              MEMORY_SIZE=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.MemorySize')
-              TIMEOUT=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.Timeout')
 
-              # Append details to CSV with Changed status
-              echo "${{ steps.generate-deployment-id.outputs.deployment_id }},$FUNCTION_NAME,$NEW_VERSION,$LAST_MODIFIED,$RUNTIME,$MEMORY_SIZE,$TIMEOUT,Yes" >> lambda_versions.csv
+              # Append details to new CSV with Changed status
+              echo "${{ steps.generate-deployment-id.outputs.deployment_id }},$FUNCTION_NAME,$NEW_VERSION,$LAST_MODIFIED,Yes" >> $NEW_CSV_NAME
             fi
           done
 
       - name: Log Unchanged Lambda Functions
         run: |
           for function in $(cat all_lambdas.txt); do
-            if ! grep -q "$function" lambda_versions.csv; then
+            if ! grep -q "$function" $NEW_CSV_NAME; then
               FUNCTION_DETAILS=$(aws lambda get-function --function-name "$function" --output json)
               LAST_MODIFIED=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.LastModified')
-              RUNTIME=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.Runtime')
-              MEMORY_SIZE=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.MemorySize')
-              TIMEOUT=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.Timeout')
 
-              # Append unchanged function details to CSV
-              echo "${{ steps.generate-deployment-id.outputs.deployment_id }},$function,Not Changed,$LAST_MODIFIED,$RUNTIME,$MEMORY_SIZE,$TIMEOUT,No" >> lambda_versions.csv
+              # Append unchanged function details to new CSV
+              echo "${{ steps.generate-deployment-id.outputs.deployment_id }},$function,Not Changed,$LAST_MODIFIED,No" >> $NEW_CSV_NAME
             fi
           done
 
       - name: Upload Lambda Versions to S3
         run: |
-          aws s3 cp lambda_versions.csv s3://lambda-versioning-data/lambda_versions.csv
+          aws s3 cp $NEW_CSV_NAME s3://lambda-versioning-data/$NEW_CSV_NAME
