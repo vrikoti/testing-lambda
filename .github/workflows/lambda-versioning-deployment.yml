@@ -51,9 +51,9 @@ jobs:
             updated_dir=$(echo "$mod_dir" | cut -d/ -f1)
             echo "$updated_dir" >> updated_directories.txt
           done
-          echo "Below directories have been updated ..."
+          echo "Below directories have been updated ... "
           cat updated_directories.txt
-          echo "Below unique directories were updated ..."
+          echo "Below unique directories were updated ... "
           sort updated_directories.txt | uniq > unique_updated_directories.txt
           cat unique_updated_directories.txt
           echo "::set-output name=changed_dirs::$(cat unique_updated_directories.txt)"
@@ -75,6 +75,18 @@ jobs:
             echo "Publishing new version of Lambda in folder: $folder"
             if [ -f "$folder/function.zip" ]; then
               aws lambda update-function-code --function-name "$folder" --zip-file fileb://$folder/function.zip
+
+              # Wait for the update to complete
+              while true; do
+                status=$(aws lambda get-function --function-name "$folder" --query 'Configuration.LastUpdateStatus' --output text)
+                if [ "$status" != "InProgress" ]; then
+                  break
+                fi
+                echo "Waiting for update to complete for $folder..."
+                sleep 5  # Wait for 5 seconds before checking again
+              done
+
+              # Publish the new version
               aws lambda publish-version --function-name "$folder"
             else
               echo "No function.zip found in $folder, skipping..."
