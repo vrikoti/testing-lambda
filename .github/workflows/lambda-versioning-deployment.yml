@@ -29,45 +29,44 @@ jobs:
         id: changed-files
         uses: tj-actions/changed-files@v39
 
-      - name: Generate Unique Deployment ID
-        id: generate-deployment-id
+      - name: Filter Changed Files
+        id: filter-changed-files
         run: |
-          DEPLOYMENT_ID=$(date +%Y%m%d%H%M%S)
-          echo "Deployment ID: $DEPLOYMENT_ID"
-          echo "::set-output name=deployment_id::$DEPLOYMENT_ID"
+          echo "${{ steps.changed-files.outputs.all_changed_files }}" | tr ' ' '\n' | grep -v -e '.gitignore' -e 'rocro.yml' | tr '\n' ' ' > filtered_files.txt
+          echo "::set-output name=filtered_files::$(cat filtered_files.txt)"
 
-      - name: Initialize New CSV File
-        id: init-csv
+      - name: Find Changed Directories
+        id: find-changed-dirs
         run: |
-          NEW_CSV_NAME="lambda_versions_${{ steps.generate-deployment-id.outputs.deployment_id }}.csv"
-          echo "DeploymentID,FunctionName,Version,LastModified,Changed" > "$NEW_CSV_NAME"
-          echo "::set-output name=csv_name::$NEW_CSV_NAME"
-
-      - name: Find All Lambda Functions
-        id: find-all-lambdas
-        run: |
-          ALL_LAMBDAS=$(aws lambda list-functions --query 'Functions[*].FunctionName' --output text)
-          echo "$ALL_LAMBDAS" > all_lambdas.txt
-          echo "::set-output name=all_lambdas::$ALL_LAMBDAS"
+          > updated_directories.txt
+          for changed_file in $(cat filtered_files.txt); do
+            mod_dir=$(dirname "$changed_file")
+            updated_dir=$(echo "$mod_dir" | cut -d/ -f1)
+            echo "$updated_dir" >> updated_directories.txt
+          done
+          sort updated_directories.txt | uniq > unique_updated_directories.txt
+          echo "::set-output name=changed_dirs::$(cat unique_updated_directories.txt)"
 
       - name: Zip Lambda Function Code
-        if: ${{ steps.changed-files.outputs.all_changed_files != '' }}
+        if: ${{ steps.find-changed-dirs.outputs.changed_dirs != '' }}
         run: |
           for folder in $(cat unique_updated_directories.txt); do
             echo "Creating zip for $folder"
-            cd $folder
+            cd "$folder"
             zip -r function.zip ./*
             cd ..
           done
 
       - name: Publish New Lambda Versions
-        if: ${{ steps.changed-files.outputs.all_changed_files != '' }}
+        if: ${{ steps.find-changed-dirs.outputs.changed_dirs != '' }}
         run: |
+          > lambda_versions.txt  # Clear previous output
           for folder in $(cat unique_updated_directories.txt); do
             echo "Publishing new version of Lambda in folder: $folder"
             if [ -f "$folder/function.zip" ]; then
-              aws lambda update-function-code --function-name "$folder" --zip-file fileb://$folder/function.zip
-
+              aws lambda update-function-code --function-name "$folder" --zip-file fileb://"$folder/function.zip"
+              
+              # Wait for the update to complete
               while true; do
                 status=$(aws lambda get-function --function-name "$folder" --query 'Configuration.LastUpdateStatus' --output text)
                 if [ "$status" != "InProgress" ]; then
@@ -77,32 +76,74 @@ jobs:
                 sleep 5
               done
 
+              # Publish the new version
               NEW_VERSION=$(aws lambda publish-version --function-name "$folder" --query 'Version' --output text)
               echo "New version published: $NEW_VERSION for $folder"
-
-              FUNCTION_DETAILS=$(aws lambda get-function --function-name "$folder" --output json)
-              FUNCTION_NAME=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.FunctionName')
-              LAST_MODIFIED=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.LastModified')
-
-              # Append details to new CSV with Changed status
-              echo "${{ steps.generate-deployment-id.outputs.deployment_id }},$FUNCTION_NAME,$NEW_VERSION,$LAST_MODIFIED,Yes" >> "${{ steps.init-csv.outputs.csv_name }}"
+              LAST_MODIFIED=$(aws lambda get-function --function-name "$folder" --query 'Configuration.LastModified' --output text)
+              echo "$folder,$NEW_VERSION,$LAST_MODIFIED" >> lambda_versions.txt
             else
               echo "No function.zip found in $folder, skipping..."
             fi
           done
 
-      - name: Log Unchanged Lambda Functions
-        run: |
-          for function in $(cat all_lambdas.txt); do
-            if ! grep -q "$function" "${{ steps.init-csv.outputs.csv_name }}"; then
-              FUNCTION_DETAILS=$(aws lambda get-function --function-name "$function" --output json)
-              LAST_MODIFIED=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.LastModified')
+  deploy_lambdas:
+    name: Deploy Updated Lambda Versions
+    runs-on: ubuntu-latest
+    needs: detect_and_publish
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
-              # Append unchanged function details to new CSV
-              echo "${{ steps.generate-deployment-id.outputs.deployment_id }},$function,Not Changed,$LAST_MODIFIED,No" >> "${{ steps.init-csv.outputs.csv_name }}"
+      - name: Deploy Updated Lambdas
+        if: ${{ steps.find-changed-dirs.outputs.changed_dirs != '' }}
+        run: |
+          for folder in $(cat unique_updated_directories.txt); do
+            echo "Deploying Lambda version in folder: $folder"
+            NEW_VERSION=$(aws lambda list-versions-by-function --function-name "$folder" --query 'Versions[-1].Version' --output text)
+            aws lambda update-alias --function-name "$folder" --name "blue" --function-version "$NEW_VERSION"
+          done
+
+  track_lambda_versions:
+    name: Track Lambda Versions
+    runs-on: ubuntu-latest
+    needs: detect_and_publish
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Track and Upload Lambda Versions
+        if: ${{ steps.find-changed-dirs.outputs.changed_dirs != '' }}
+        run: |
+          output_file="lambda_versions.txt"
+          echo "FunctionName,Version,LastModified" > new_lambda_versions.csv
+
+          for folder in $(cat unique_updated_directories.txt); do
+            version=$(aws lambda list-versions-by-function --function-name "$folder" --query 'Versions[*].Version' --output text)
+            LAST_MODIFIED=$(aws lambda get-function --function-name "$folder" --query 'Configuration.LastModified' --output text)
+
+            if [ $? -ne 0 ]; then
+              echo "Error retrieving versions for $folder" >> $output_file
+            else
+              echo "$folder,$version,$LAST_MODIFIED" >> new_lambda_versions.csv
             fi
           done
 
-      - name: Upload Lambda Versions to S3
-        run: |
-          aws s3 cp "${{ steps.init-csv.outputs.csv_name }}" s3://lambda-versioning-data/"${{ steps.init-csv.outputs.csv_name }}"
+          # Append unchanged functions to CSV
+          ALL_LAMBDAS=$(aws lambda list-functions --query 'Functions[*].FunctionName' --output text)
+          for function in $ALL_LAMBDAS; do
+            if ! grep -q "$function" new_lambda_versions.csv; then
+              LAST_MODIFIED=$(aws lambda get-function --function-name "$function" --query 'Configuration.LastModified' --output text)
+              echo "$function,Not Changed,$LAST_MODIFIED" >> new_lambda_versions.csv
+            fi
+          done
+
+          # Upload to S3
+          aws s3 cp new_lambda_versions.csv s3://lambda-versioning-data/new_lambda_versions.csv
