@@ -25,48 +25,53 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Identify Changed Lambda Functions
-        id: detect_changes
-        run: |
-          # Identify which Lambda functions have changed
-          if [ $(git rev-list --count HEAD) -eq 1 ]; then
-            echo "Initial commit detected, using git diff-tree"
-            CHANGED_FOLDERS=$(git diff-tree --no-commit-id --name-only -r HEAD | grep 'test-' | cut -d '/' -f1 | uniq || true)
-          else
-            echo "Non-initial commit, using git diff"
-            CHANGED_FILES=$(git diff --name-only origin/main HEAD)
-            echo "Changed files: $CHANGED_FILES"
-            CHANGED_FOLDERS=$(echo "$CHANGED_FILES" | grep 'test-' | cut -d '/' -f1 | uniq || true)
-          fi
-          echo "CHANGED_FOLDERS=$CHANGED_FOLDERS" >> $GITHUB_ENV
+      - name: Identify Changed Files
+        id: changed-files
+        uses: tj-actions/changed-files@v39
 
-      - name: Debug Changed Folders After Assignment
+      - name: Get the current branch name
+        id: get-branch
         run: |
-          echo "CHANGED_FOLDERS after assignment: $CHANGED_FOLDERS"
-        env:
-          CHANGED_FOLDERS: ${{ env.CHANGED_FOLDERS }}
+          CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          echo "Current branch: $CURRENT_BRANCH"
+          echo "::set-output name=branch::$CURRENT_BRANCH"
+
+      - name: Filter Changed Files
+        id: filter-changed-files
+        run: |
+          echo "${{ steps.changed-files.outputs.all_changed_files }}" | tr ' ' '\n' | grep -v -e '.gitignore' -e 'rocro.yml' | tr '\n' ' ' > filtered_files.txt
+          echo "::set-output name=filtered_files::$(cat filtered_files.txt)"
+
+      - name: Find Changed Directories
+        id: find-changed-dirs
+        run: |
+          > updated_directories.txt
+          for changed_file in $(cat filtered_files.txt); do
+            mod_dir=$(dirname "$changed_file")
+            updated_dir=$(echo "$mod_dir" | cut -d/ -f1)
+            echo "$updated_dir" >> updated_directories.txt
+          done
+          echo "Below directories have been updated ..."
+          cat updated_directories.txt
+          echo "Below unique directories were updated ..."
+          sort updated_directories.txt | uniq > unique_updated_directories.txt
+          cat unique_updated_directories.txt
+          echo "::set-output name=changed_dirs::$(cat unique_updated_directories.txt)"
 
       - name: Zip Lambda Function Code
-        if: ${{ env.CHANGED_FOLDERS != '' }}
+        if: ${{ steps.find-changed-dirs.outputs.changed_dirs != '' }}
         run: |
-          for folder in $CHANGED_FOLDERS; do
+          for folder in $(cat unique_updated_directories.txt); do
             echo "Creating zip for $folder"
             cd $folder
             zip -r function.zip ./*
             cd ..
           done
-        env:
-          CHANGED_FOLDERS: ${{ env.CHANGED_FOLDERS }}
 
       - name: Publish New Lambda Versions
-        if: ${{ env.CHANGED_FOLDERS != '' }}
+        if: ${{ steps.find-changed-dirs.outputs.changed_dirs != '' }}
         run: |
-          if [ -z "$CHANGED_FOLDERS" ]; then
-            echo "No Lambda functions changed. Skipping..."
-            exit 0
-          fi
-          # Publish new version for each changed Lambda function
-          for folder in $CHANGED_FOLDERS; do
+          for folder in $(cat unique_updated_directories.txt); do
             echo "Publishing new version of Lambda in folder: $folder"
             if [ -f "$folder/function.zip" ]; then
               aws lambda update-function-code --function-name "$folder" --zip-file fileb://$folder/function.zip
@@ -75,8 +80,6 @@ jobs:
               echo "No function.zip found in $folder, skipping..."
             fi
           done
-        env:
-          CHANGED_FOLDERS: ${{ env.CHANGED_FOLDERS }}
 
   deploy_lambdas:
     name: Deploy Updated Lambda Versions
@@ -90,24 +93,14 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Debug Deploy Changed Folders
-        if: ${{ env.CHANGED_FOLDERS != '' }}
-        run: |
-          echo "CHANGED_FOLDERS during deploy step: $CHANGED_FOLDERS"
-        env:
-          CHANGED_FOLDERS: ${{ env.CHANGED_FOLDERS }}
-
       - name: Deploy Updated Lambdas
-        if: ${{ env.CHANGED_FOLDERS != '' }}
+        if: ${{ steps.find-changed-dirs.outputs.changed_dirs != '' }}
         run: |
-          # Update alias to point to the new Lambda version
-          for folder in $CHANGED_FOLDERS; do
+          for folder in $(cat unique_updated_directories.txt); do
             echo "Deploying Lambda version in folder: $folder"
             NEW_VERSION=$(aws lambda list-versions-by-function --function-name "$folder" --query 'Versions[-1].Version' --output text)
             aws lambda update-alias --function-name "$folder" --name "blue" --function-version "$NEW_VERSION"
           done
-        env:
-          CHANGED_FOLDERS: ${{ env.CHANGED_FOLDERS }}
 
   track_lambda_versions:
     name: Track Lambda Versions
@@ -122,12 +115,9 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Track Lambda Versions
-        if: ${{ env.CHANGED_FOLDERS != '' }}
+        if: ${{ steps.find-changed-dirs.outputs.changed_dirs != '' }}
         run: |
-          # Track the current version of each changed Lambda function
-          for folder in $CHANGED_FOLDERS; do
+          for folder in $(cat unique_updated_directories.txt); do
             version=$(aws lambda list-versions-by-function --function-name "$folder" --query 'Versions[-1].Version' --output text)
             echo "Lambda function $folder is now at version $version"
           done
-        env:
-          CHANGED_FOLDERS: ${{ env.CHANGED_FOLDERS }}
