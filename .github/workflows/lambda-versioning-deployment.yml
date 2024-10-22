@@ -129,7 +129,20 @@ jobs:
       - name: Track Lambda Versions
         if: ${{ steps.find-changed-dirs.outputs.changed_dirs != '' }}
         run: |
+          output_file="lambda_versions.txt"
+          echo "Tracking Lambda versions..." > $output_file
           for folder in $(cat unique_updated_directories.txt); do
             version=$(aws lambda list-versions-by-function --function-name "$folder" --query 'Versions[-1].Version' --output text)
-            echo "Lambda function $folder is now at version $version"
+            echo "Lambda function $folder is now at version $version" >> $output_file
           done
+          # Print the output file to the console for visibility
+          cat $output_file
+
+      - name: Upload Lambda Versions Output
+        uses: actions/upload-artifact@v2
+        with:
+          name: lambda-versions-output
+          path: lambda_versions.txt
+      - name: Upload to S3
+        run: |
+          aws s3 cp lambda_versions.txt s3://lambda-versioning-data/lambda_versions.txt
