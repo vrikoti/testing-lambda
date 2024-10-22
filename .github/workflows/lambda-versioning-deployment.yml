@@ -37,9 +37,11 @@ jobs:
           echo "::set-output name=deployment_id::$DEPLOYMENT_ID"
 
       - name: Initialize New CSV File
+        id: init-csv
         run: |
           NEW_CSV_NAME="lambda_versions_${{ steps.generate-deployment-id.outputs.deployment_id }}.csv"
-          echo "DeploymentID,FunctionName,Version,LastModified,Changed" > $NEW_CSV_NAME
+          echo "DeploymentID,FunctionName,Version,LastModified,Changed" > "$NEW_CSV_NAME"
+          echo "::set-output name=csv_name::$NEW_CSV_NAME"
 
       - name: Find All Lambda Functions
         id: find-all-lambdas
@@ -83,22 +85,22 @@ jobs:
               LAST_MODIFIED=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.LastModified')
 
               # Append details to new CSV with Changed status
-              echo "${{ steps.generate-deployment-id.outputs.deployment_id }},$FUNCTION_NAME,$NEW_VERSION,$LAST_MODIFIED,Yes" >> $NEW_CSV_NAME
+              echo "${{ steps.generate-deployment-id.outputs.deployment_id }},$FUNCTION_NAME,$NEW_VERSION,$LAST_MODIFIED,Yes" >> "${{ steps.init-csv.outputs.csv_name }}"
             fi
           done
 
       - name: Log Unchanged Lambda Functions
         run: |
           for function in $(cat all_lambdas.txt); do
-            if ! grep -q "$function" $NEW_CSV_NAME; then
+            if ! grep -q "$function" "${{ steps.init-csv.outputs.csv_name }}"; then
               FUNCTION_DETAILS=$(aws lambda get-function --function-name "$function" --output json)
               LAST_MODIFIED=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.LastModified')
 
               # Append unchanged function details to new CSV
-              echo "${{ steps.generate-deployment-id.outputs.deployment_id }},$function,Not Changed,$LAST_MODIFIED,No" >> $NEW_CSV_NAME
+              echo "${{ steps.generate-deployment-id.outputs.deployment_id }},$function,Not Changed,$LAST_MODIFIED,No" >> "${{ steps.init-csv.outputs.csv_name }}"
             fi
           done
 
       - name: Upload Lambda Versions to S3
         run: |
-          aws s3 cp $NEW_CSV_NAME s3://lambda-versioning-data/$NEW_CSV_NAME
+          aws s3 cp "${{ steps.init-csv.outputs.csv_name }}" s3://lambda-versioning-data/"${{ steps.init-csv.outputs.csv_name }}"
