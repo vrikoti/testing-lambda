@@ -64,7 +64,20 @@ jobs:
           for folder in $(cat unique_updated_directories.txt); do
             echo "Publishing new version of Lambda in folder: $folder"
             if [ -f "$folder/function.zip" ]; then
+              # Update the function code
               aws lambda update-function-code --function-name "$folder" --zip-file fileb://$folder/function.zip
+
+              # Wait for the update to complete
+              while true; do
+                status=$(aws lambda get-function --function-name "$folder" --query 'Configuration.LastUpdateStatus' --output text)
+                if [ "$status" != "InProgress" ]; then
+                  break
+                fi
+                echo "Waiting for update to complete for $folder..."
+                sleep 5  # Wait for 5 seconds before checking again
+              done
+
+              # Now publish the new version
               NEW_VERSION=$(aws lambda publish-version --function-name "$folder" --output text)
               echo "New version published: $NEW_VERSION for $folder"
 
