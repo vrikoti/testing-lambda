@@ -5,7 +5,7 @@ def lambda_handler(event, context):
     print("Event:", event)
     
     # Example logic for testing
-    message = "Hello from test V2 !"
+    message = "Hello from test V2 ..let me work !"
     
     # Example response
     response = {
