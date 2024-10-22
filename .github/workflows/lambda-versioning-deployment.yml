@@ -51,9 +51,9 @@ jobs:
             updated_dir=$(echo "$mod_dir" | cut -d/ -f1)
             echo "$updated_dir" >> updated_directories.txt
           done
-          echo "Below directories have been updated ..."
+          echo "Below directories have been updated ... "
           cat updated_directories.txt
-          echo "Below unique directories were updated ..."
+          echo "Below unique directories were updated ... "
           sort updated_directories.txt | uniq > unique_updated_directories.txt
           cat unique_updated_directories.txt
           echo "::set-output name=changed_dirs::$(cat unique_updated_directories.txt)"
@@ -71,7 +71,7 @@ jobs:
       - name: Publish New Lambda Versions
         if: ${{ steps.find-changed-dirs.outputs.changed_dirs != '' }}
         run: |
-          echo '{}' > lambda_versions.json  # Initialize an empty JSON file
+          echo "FunctionName,Version,LastModified,Runtime,MemorySize,Timeout" > lambda_versions.csv  # Initialize CSV header
           for folder in $(cat unique_updated_directories.txt); do
             echo "Publishing new version of Lambda in folder: $folder"
             if [ -f "$folder/function.zip" ]; then
@@ -89,23 +89,27 @@ jobs:
               done
 
               # Now publish the new version
-              NEW_VERSION=$(aws lambda publish-version --function-name "$folder" --output text)
+              NEW_VERSION=$(aws lambda publish-version --function-name "$folder" --query 'Version' --output text)
               echo "New version published: $NEW_VERSION for $folder"
 
-              # Track the new version
-              jq --arg name "$folder" --arg version "$NEW_VERSION" \
-                '.[$name] = { "version": $version }' lambda_versions.json > tmp.json && mv tmp.json lambda_versions.json
+              # Fetch function details
+              FUNCTION_DETAILS=$(aws lambda get-function --function-name "$folder" --output json)
+              FUNCTION_NAME=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.FunctionName')
+              LAST_MODIFIED=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.LastModified')
+              RUNTIME=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.Runtime')
+              MEMORY_SIZE=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.MemorySize')
+              TIMEOUT=$(echo "$FUNCTION_DETAILS" | jq -r '.Configuration.Timeout')
+
+              # Append details to CSV
+              echo "$FUNCTION_NAME,$NEW_VERSION,$LAST_MODIFIED,$RUNTIME,$MEMORY_SIZE,$TIMEOUT" >> lambda_versions.csv
             else
               echo "No function.zip found in $folder, skipping..."
             fi
           done
 
       - name: Upload Lambda Versions to S3
+        if: ${{ steps.find-changed-dirs.outputs.changed_dirs != '' }}
         run: |
-          if [ -f lambda_versions.json ]; then
-            echo "Uploading lambda_versions.json to S3..."
-            aws s3 cp lambda_versions.json s3://lambda-versioning-data/lambda_versions.json
-          else
-            echo "Error: lambda_versions.json does not exist."
-            exit 1
-          fi
+          aws s3 cp lambda_versions.csv s3://lambda-versioning-data/lambda_versions.csv
+
+  # Additional jobs for deploying lambdas or tracking versions can be added here
