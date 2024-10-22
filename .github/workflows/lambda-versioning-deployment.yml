@@ -139,7 +139,7 @@ jobs:
           cat $output_file
 
       - name: Upload Lambda Versions Output
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: lambda-versions-output
           path: lambda_versions.txt
